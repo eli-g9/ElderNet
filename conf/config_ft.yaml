@@ -15,6 +15,6 @@ model:
 data:
   # data_root: F:\UNI\ParkinsonsProject\ParkScan-Pro\parsing_output
   # log_path: F:\UNI\ParkinsonsProject\ParkScan-Pro\logs
-  data_root: ..\parsing_output
-  log_path: ..\logs
+  data_root: ../parsing_output
+  log_path: ../logs
   dense_labeling: False
