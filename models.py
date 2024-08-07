@@ -614,6 +614,76 @@ class ElderNet(nn.Module):
 
         elif self.is_simclr:
             return representation
+        
+
+# class ElderNet(nn.Module):
+#     def __init__(self, feature_extractor, head='fc', non_linearity=True,  linear_model_input_size=1024,
+#                  linear_model_output_size=50, is_mtl=False, is_simclr=False, is_eva=False, is_dense=False, output_size=2):
+#         super(ElderNet, self).__init__()
+#         # Load the pretrained layers without classifier
+#         self.feature_extractor = feature_extractor
+#         self.is_mtl = is_mtl # multy task learning
+#         self.is_simclr = is_simclr
+#         self.is_eva = is_eva #evaluating mode (fine-tuning)
+#         self.is_dense = is_dense #dense labeling
+#         # Freeze the pretrained layers
+#         if not self.is_eva:
+#             for param in self.feature_extractor.parameters():
+#                 param.requires_grad = False
+#         # Add the small model
+#         self.head = head
+
+#         # Option 1: FC layers
+#         if self.head == 'fc':
+#             self.fc = LinearLayers(linear_model_input_size, linear_model_output_size, non_linearity)
+#         # Option 2: adding the unet layers
+#         elif self.head == 'unet':
+#             self.unet = Unet(as_head=True,is_eva=self.is_eva, is_mtl=self.is_mtl, is_simclr=self.is_simclr)
+
+#         if self.is_mtl:
+#             self.aot_h = Classifier(
+#                 input_size=linear_model_output_size, output_size=2
+#             )
+#             self.scale_h = Classifier(
+#                 input_size=linear_model_output_size, output_size=2
+#             )
+#             self.permute_h = Classifier(
+#                 input_size=linear_model_output_size, output_size=2
+#             )
+#             self.time_w_h = Classifier(
+#                 input_size=linear_model_output_size, output_size=2
+#             )
+
+#         # Indicate if we are in evaluation mode (and then add a classification head)
+#         if self.is_eva:
+#             self.classifier = Classifier(linear_model_output_size, 2)
+
+#         if self.is_dense:
+#             self.classifier = Classifier(linear_model_output_size, 300)
+
+#     def forward(self, x):
+#         features = self.feature_extractor(x)
+#         if self.head == 'fc':
+#             representation = self.fc(features.view(x.shape[0], -1))
+#         elif self.head == 'unet':
+#             features = torch.transpose(features, 2, 1)
+#             # features =  features.view(x.shape[0], -1)
+#             representation = self.unet(features)
+
+#         if self.is_mtl:
+#             aot_y = self.aot_h(representation)
+#             scale_y = self.scale_h(representation)
+#             permute_y = self.permute_h(representation)
+#             time_w_h = self.time_w_h(representation)
+
+#             return aot_y, scale_y, permute_y, time_w_h
+
+#         elif self.is_eva or self.is_dense:
+#             logits = self.classifier(representation)
+#             return logits
+
+#         elif self.is_simclr:
+#             return representation
 
 
 def weight_init(self, mode="fan_out", nonlinearity="relu"):

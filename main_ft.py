@@ -32,6 +32,7 @@ warnings.filterwarnings("ignore")
 
 now = datetime.now()
 
+TEST_SIZE = 0.125
 
 def check_performance_post(labels, predictions):
     """Check the performance of the model after the post-processing stage.
@@ -130,6 +131,7 @@ def set_seed(device, my_seed=0):
     if device.type == 'cuda':
         torch.cuda.manual_seed_all(random_seed)
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 @hydra.main(config_path="conf", config_name="config_ft", version_base='1.1')
 def main(cfg):
@@ -160,6 +162,7 @@ def main(cfg):
                + dt_string
 
     output_path = os.path.join(
+        PROJECT_ROOT,
         main_log_dir,
         "models",
         run_name
@@ -171,10 +174,10 @@ def main(cfg):
     weights_path = os.path.join(output_path, 'weights.pt')
 
     # Load the data (resample to 30 hz and divided into windows of 10 sec)
-    X = pickle.load(open(os.path.join(cfg.data.data_root, 'WindowsData.p'), 'rb'))  # (n_windows, 3, 300)
-    Y = pickle.load(open(os.path.join(cfg.data.data_root, 'WindowsLabels.p'), 'rb'))  # (n_windows,2)
+    X = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsData.p'), 'rb'))  # (n_windows, 3, 300)
+    Y = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsLabels.p'), 'rb'))  # (n_windows,2)
     # The groups vector indicates the subject_id of each window, which is needed for subject-wise division.
-    groups = pickle.load(open(os.path.join(cfg.data.data_root, 'WindowsSubjects.p'), 'rb'))  # (n_windows,)
+    groups = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsSubjects.p'), 'rb'))  # (n_windows,)
 
     seeds = constants.SEEDS
     # List of performance metrics names
@@ -197,7 +200,7 @@ def main(cfg):
 
             # prepare training and validation sets
             folds = GroupShuffleSplit(
-                1, test_size=0.2, random_state=41
+                1, test_size=TEST_SIZE, random_state=41
             ).split(X_train, Y_train, groups=groups_train)
             train_idx, val_idx = next(folds)
 
@@ -246,6 +249,7 @@ def main(cfg):
             walk = np.sum(y_train[:, 1])
             notwalk = np.sum(y_train[:, 0])
             class_weights = [(walk * 9.0) / notwalk, 1.0]
+            # [0 tremor = 1/0.68, 1 tremor = 1/0.22, 3, 4, 5]
             #############################################
             # Set the Model
             #############################################
