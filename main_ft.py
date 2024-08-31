@@ -101,7 +101,8 @@ def evaluate_model(model, val_loader, device, loss_fn):
             true_y = y.to(device, dtype=torch.long)
 
             logits = model(x)
-            loss = loss_fn(logits.float(), true_y.float())
+            # loss = loss_fn(logits.float(), true_y.float())
+            loss = loss_fn(logits.float(), torch.argmax(true_y, dim=1))
 
             probs = F.softmax(logits, dim=1)
             pred_y = torch.argmax(probs, dim=1)
@@ -250,6 +251,12 @@ def main(cfg):
             notwalk = np.sum(y_train[:, 0])
             class_weights = [(walk * 9.0) / notwalk, 1.0]
             # [0 tremor = 1/0.68, 1 tremor = 1/0.22, 3, 4, 5]
+            class_weights = [len(y_train) / sum(y_train[:, i]) for i in range(len(y_train[0]))]
+            print(f"[*] DEBUG: CLASS WEIGHTS = {class_weights}")
+            # if cfg.model.multiclass:
+                
+            # else:
+            #     class_weights = 
             #############################################
             # Set the Model
             #############################################
@@ -267,9 +274,9 @@ def main(cfg):
                 if not cfg.model.ssl_checkpoint_available:
                     pretrained_model = utils.get_sslnet(pretrained=True)
                     feature_extractor = pretrained_model.feature_extractor
-                    model = Resnet(feature_extractor=feature_extractor, is_eva=True)
+                    model = Resnet(output_size=len(class_weights), feature_extractor=feature_extractor, is_eva=True)
                     if cfg.model.net == 'ElderNet':
-                        model = ElderNet(feature_extractor, cfg.model.head, is_eva=True)
+                        model = ElderNet(feature_extractor, cfg.model.head, output_size=len(class_weights), is_eva=True)
                 # Use a pretrained model of your own
                 else:
                     load_weights(cfg.model.trained_model_path, model, device)
@@ -298,7 +305,8 @@ def main(cfg):
                     optimizer.zero_grad()
 
                     logits = model(x)
-                    loss = loss_fn(logits.float(), true_y.float())
+                    # loss = loss_fn(logits.float(), true_y.float())
+                    loss = loss_fn(logits.float(), torch.argmax(true_y, dim=1))
                     loss.backward()
                     optimizer.step()
 
@@ -306,7 +314,8 @@ def main(cfg):
                     probs = F.softmax(logits, dim=1)
                     # Extract the gait probabilities
                     pred_y = torch.argmax(probs, dim=1)
-                    train_acc = torch.sum(pred_y == true_y[:, 1])
+                    # train_acc = torch.sum(pred_y == true_y[:, 1])
+                    train_acc = torch.sum(pred_y == torch.argmax(true_y, dim=1))
                     train_acc = train_acc / (pred_y.size()[0])
 
                     train_losses.append(loss.cpu().detach())

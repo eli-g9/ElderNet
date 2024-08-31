@@ -11,6 +11,7 @@ model:
   lr :  1e-4
   batch_size : 100
   patience: 5
+  multiclass: True
 
 data:
   # data_root: F:\UNI\ParkinsonsProject\ParkScan-Pro\parsing_output

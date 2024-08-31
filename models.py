@@ -413,8 +413,9 @@ class Resnet(nn.Module):
 
 
 class Unet(nn.Module):
-    def __init__(self, as_head=False, is_mtl=False, is_simclr=False, is_eva=False):
+    def __init__(self, output_size=2, as_head=False, is_mtl=False, is_simclr=False, is_eva=False):
         super().__init__()
+        self.output_size = output_size
         self.as_head = as_head #indicate if the Unet model used alone or as a head of the Resnet model
         self.is_mtl = is_mtl
         self.is_simclr = is_simclr
@@ -456,16 +457,16 @@ class Unet(nn.Module):
 
         if self.is_mtl and not self.as_head:
             self.aot_h = Classifier(
-                input_size=50, output_size=2
+                input_size=50, output_size=output_size
             )
             self.scale_h = Classifier(
-                input_size=50, output_size=2
+                input_size=50, output_size=output_size
             )
             self.permute_h = Classifier(
-                input_size=50, output_size=2
+                input_size=50, output_size=output_size
             )
             self.time_w_h = Classifier(
-                input_size=50, output_size=2
+                input_size=50, output_size=output_size
             )
 
         # Indicate if we are in evaluation mode (and then add a classification head)
@@ -548,7 +549,7 @@ class Unet(nn.Module):
 
 class ElderNet(nn.Module):
     def __init__(self, feature_extractor, head='fc', non_linearity=True,  linear_model_input_size=1024,
-                 linear_model_output_size=50, is_mtl=False, is_simclr=False, is_eva=False, is_dense=False):
+                 linear_model_output_size=50, output_size=2, is_mtl=False, is_simclr=False, is_eva=False, is_dense=False):
         super(ElderNet, self).__init__()
         # Load the pretrained layers without classifier
         self.feature_extractor = feature_extractor
@@ -572,21 +573,21 @@ class ElderNet(nn.Module):
 
         if self.is_mtl:
             self.aot_h = Classifier(
-                input_size=linear_model_output_size, output_size=2
+                input_size=linear_model_output_size, output_size=output_size
             )
             self.scale_h = Classifier(
-                input_size=linear_model_output_size, output_size=2
+                input_size=linear_model_output_size, output_size=output_size
             )
             self.permute_h = Classifier(
-                input_size=linear_model_output_size, output_size=2
+                input_size=linear_model_output_size, output_size=output_size
             )
             self.time_w_h = Classifier(
-                input_size=linear_model_output_size, output_size=2
+                input_size=linear_model_output_size, output_size=output_size
             )
 
         # Indicate if we are in evaluation mode (and then add a classification head)
         if self.is_eva:
-            self.classifier = Classifier(linear_model_output_size, 2)
+            self.classifier = Classifier(linear_model_output_size, output_size)
 
         if self.is_dense:
             self.classifier = Classifier(linear_model_output_size, 300)
