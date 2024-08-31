@@ -1,3 +1,6 @@
+In order for this version to work, the data folder needs to be ../parsing_output/
+Necessary to create the path ../logs/models/
+
 # ElderNet: Automated Gait Detection for Older Adults
 
 ![ElderNet Pipeline](/imgs/ElderNetPipeline.png)
