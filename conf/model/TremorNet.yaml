@@ -1,0 +1,11 @@
+name: "${model.ssl_method}_${model.net}_pretrained_${model.pretrained}_head_${model.head}_nonlinearity_${model.non_linearity}_nLayers_${model.num_layers}"
+net: TremorNet
+head: fc
+num_layers: 3
+non_linearity: True
+pretrained: True
+ssl_checkpoint_available: False
+ft_checkpoint_available: False
+# trained_model_path : F:\UNI\ParkinsonsProject\ElderNet\model_check_point\ft_weights.pt
+# trained_model_path : F:\UNI\ParkinsonsProject\ElderNet\model_check_point\ssl_weights.mdl
+trained_model_path : ./model_check_point/ssl_weights.mdl
