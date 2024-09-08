@@ -1,21 +1,23 @@
 defaults:
   - _self_
-  - model: ElderNet
+  # - model: ElderNet
+  - model: TremorNet
   - augmentation: all
   - dataloader: ten_sec_no_overlap
 
 model:
   ssl_method: mtl
   # num_epochs : 5
-  num_epochs: 30
+  # num_epochs: 30
+  num_epochs: 10
   lr :  1e-4
   batch_size : 100
   patience: 5
   multiclass: True
 
 data:
-  # data_root: F:\UNI\ParkinsonsProject\ParkScan-Pro\parsing_output
-  # log_path: F:\UNI\ParkinsonsProject\ParkScan-Pro\logs
-  data_root: ../parsing_output
-  log_path: ../logs
+  # data_root: \parsing_output
+  # log_path: \logs
+  data_root: ..\parsing_output
+  log_path: ..\logs
   dense_labeling: False
