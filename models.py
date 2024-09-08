@@ -3,6 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+RESAMPLED_HZ = 30
+NUM_BINS_FFT = 10
+
 
 ####################################################################################################################
 # Contrastive Loss
@@ -615,7 +618,88 @@ class ElderNet(nn.Module):
 
         elif self.is_simclr:
             return representation
-        
+
+
+class TremorNet(nn.Module):
+    def __init__(self, feature_extractor, input_size=1024, fft_size=60, output_size=2, num_layers=1):
+        """
+        Initializes the TremorNet model.
+
+        Args:
+            feature_extractor (nn.Module): Pretrained feature extractor.
+            fft_product (torch.Tensor): Precomputed FFT product to be added to intermediate outputs.
+            input_size (int): Dimensionality of the input features. Default is 1024.
+            fft_size (int): Size of the FFT layer output. Default is 60.
+            output_size (int): Dimensionality of the final output. Default is 1.
+            num_layers (int): Number of hidden layers. Default is 1.
+        """
+        super(TremorNet, self).__init__()
+
+        self.feature_extractor = feature_extractor
+        # self.fft_product = fft_product - decided to move forward w\o this
+        self.input_size = input_size
+        self.fft_size = fft_size
+        self.output_size = output_size
+        self.num_layers = num_layers
+
+        # Initialize hidden layers
+        self.linear_layers = nn.ModuleList()
+        self.bn_layers = nn.ModuleList()
+        hidden_size = self.input_size
+
+        for _ in range(self.num_layers):
+            next_hidden_size = max(hidden_size // 2, 64)  # Avoid small hidden layers
+            self.linear_layers.append(nn.Linear(hidden_size, next_hidden_size))
+            self.bn_layers.append(nn.BatchNorm1d(next_hidden_size))
+            hidden_size = next_hidden_size
+
+        # Output layers
+        self.interm_output = nn.Linear(hidden_size, self.fft_size)
+        self.final_output = nn.Linear(self.fft_size, output_size)
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def forward(self, x):
+        """
+        Forward pass through the model. Calculates the fft features in the process.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor.
+        """
+        # Compute FFT for the current window
+        fft_product = np.empty((x.shape[0], 2 * 3 * NUM_BINS_FFT))  # 3 axes * NUM_BINS_FFT bins
+        for i, window_data in enumerate(x):
+            fft_out = fft_bins(window_data.detach().numpy(), RESAMPLED_HZ)
+            fft_out = fft_out.reshape(2 * 3 * NUM_BINS_FFT)
+            fft_product[i, :] = fft_out
+        fft_result_tensor = torch.from_numpy(fft_product).float()
+
+        x = self.feature_extractor(x)
+        x = x.squeeze(-1)  # Remove the last dimension
+
+        for linear, bn in zip(self.linear_layers, self.bn_layers):
+            x = F.relu(bn(linear(x)))
+
+        x = self.interm_output(x)
+        x = x + fft_result_tensor
+        return self.final_output(x)
+
+    def _init_weights(self, module):
+        """
+        Initializes the weights of the model using Xavier uniform distribution.
+
+        Args:
+            module (nn.Module): Module to initialize.
+        """
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
 
 # class ElderNet(nn.Module):
 #     def __init__(self, feature_extractor, head='fc', non_linearity=True,  linear_model_input_size=1024,
@@ -701,24 +785,79 @@ def weight_init(self, mode="fan_out", nonlinearity="relu"):
             nn.init.constant_(m.bias, 0)
 
 
+def average_fft_in_bins(fft_output, freqs):
+    """
+    Compute the average and median FFT values in bins for the input fft_output and freqs.
+
+    Parameters
+    ----------
+    fft_output : numpy.ndarray
+        A 3D numpy array containing acceleration data for three axes (X, Y, Z) and time.
+        The shape of the array should be (number_of_samples, 3).
+
+    freqs : numpy.ndarray
+        An array containing the corresponding frequencies for the input fft_output.
+
+    NUM_BINS_FFT : int, optional
+        The number of bins to use for computing the average and median FFT values. The default is 10.
+
+    Returns
+    -------
+    avg_fft_values, median_fft_values : numpy.ndarray
+        Two numpy arrays containing the average and median FFT values in bins, respectively.
+        The shape of the arrays should be (number_of_bins,).
+    """
+    # Determine the frequency range
+    min_freq = np.min(freqs)
+    max_freq = np.max(freqs)
+
+    # Create bins
+    bins = np.linspace(min_freq, max_freq, NUM_BINS_FFT + 1)
+
+    # Compute average FFT values in each bin
+    avg_fft_values = []
+    median_fft_values = []
+    for i in range(len(fft_output)):
+        avg_values, median_values = [], []
+        for j in range(NUM_BINS_FFT):
+            bin_mask = (freqs >= bins[j]) & (freqs < bins[j + 1])
+            avg_values.append(np.mean(np.abs(fft_output[i][bin_mask])))
+            median_values.append(np.median(np.abs(fft_output[i][bin_mask])))
+        avg_fft_values.append(avg_values)
+        median_fft_values.append(median_values)
+
+    return avg_fft_values, median_fft_values
 
 
+def fft_bins(data, data_freq):
+    """
+    Compute the Fast Fourier Transform (FFT) for each acceleration axis of the input data,
+    and then compute the average and median FFT values in bins.
 
+    Parameters
+    ----------
+    data : numpy.ndarray
+        A numpy array containing acceleration data for three axes (X, Y, Z) and time.
+        The shape of the array should be (number_of_samples, 3).
 
+    data_freq : float
+        The sampling frequency of the input data.
 
+    Returns
+    -------
+    avg_fft_values, median_fft_values : numpy.ndarray
+        Two numpy arrays containing the average and median FFT values in bins, respectively.
+        The shape of the arrays should be (number_of_bins,).
+    """
+    # Compute FFT for each acceleration axis
+    data.reshape(10 * RESAMPLED_HZ, 3)
+    fft_output = [np.fft.fft(data[:, i]) for i in range(3)]
 
+    # Compute the corresponding frequencies
+    n = data.shape[0]
+    freqs = np.fft.fftfreq(n, d=1/data_freq)
 
+    # Compute the average and median FFT values in bins
+    avg_fft_values, median_fft_values = average_fft_in_bins(fft_output, freqs)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return np.array([avg_fft_values, median_fft_values])

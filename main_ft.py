@@ -13,7 +13,7 @@ from sklearn.model_selection import StratifiedGroupKFold, GroupShuffleSplit
 from sklearn.metrics import roc_curve, precision_recall_curve
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torch.utils.data import DataLoader
-from models import Resnet, ElderNet
+from models import Resnet, ElderNet, TremorNet
 
 from dataset.transformations import RotationAxis, RandomSwitchAxis
 from dataset.dataloader import FT_Dataset
@@ -33,6 +33,7 @@ warnings.filterwarnings("ignore")
 now = datetime.now()
 
 TEST_SIZE = 0.125
+
 
 def check_performance_post(labels, predictions):
     """Check the performance of the model after the post-processing stage.
@@ -132,7 +133,9 @@ def set_seed(device, my_seed=0):
     if device.type == 'cuda':
         torch.cuda.manual_seed_all(random_seed)
 
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
 
 @hydra.main(config_path="conf", config_name="config_ft", version_base='1.1')
 def main(cfg):
@@ -170,12 +173,16 @@ def main(cfg):
     )
 
     if not os.path.isdir(output_path):
-        os.mkdir(output_path)
+        os.makedirs(output_path)
     # Path to save the model weights
     weights_path = os.path.join(output_path, 'weights.pt')
 
     # Load the data (resample to 30 hz and divided into windows of 10 sec)
     X = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsData.p'), 'rb'))  # (n_windows, 3, 300)
+    # fft_product = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsFFT.p'), 'rb'))  # (n_windows, 60)
+    # fft_product_expanded = np.expand_dims(fft_product, axis=1)  # Shape: (n_windows, 1, 60)
+    # fft_product_expanded = np.tile(fft_product_expanded, (1, X.shape[1], 1))  # Shape: (n_windows, 3, 60)
+    # X = np.concatenate((X, fft_product_expanded), axis=-1)  # Shape: (n_windows, 3, 360)
     Y = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsLabels.p'), 'rb'))  # (n_windows,2)
     # The groups vector indicates the subject_id of each window, which is needed for subject-wise division.
     groups = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsSubjects.p'), 'rb'))  # (n_windows,)
@@ -254,9 +261,8 @@ def main(cfg):
             class_weights = [len(y_train) / sum(y_train[:, i]) for i in range(len(y_train[0]))]
             print(f"[*] DEBUG: CLASS WEIGHTS = {class_weights}")
             # if cfg.model.multiclass:
-                
             # else:
-            #     class_weights = 
+            #     class_weights =
             #############################################
             # Set the Model
             #############################################
@@ -265,10 +271,14 @@ def main(cfg):
                 feature_extractor = Resnet().feature_extractor
                 model = getattr(models, cfg.model.net)(feature_extractor, head=cfg.model.head,
                                                        non_linearity=cfg.model.non_linearity, is_eva=True)
+            elif cfg.model.net == 'TremorNet':
+                feature_extractor = Resnet().feature_extractor
+                model = getattr(models, cfg.model.net)(feature_extractor)
             else:
                 model = getattr(models, cfg.model.net)(is_eva=True)
 
             # Choose if to use an already pretrained model (such as the UKB model)
+            print('model initalizing...')
             if cfg.model.pretrained:
                 # Use the model from the UKB paper
                 if not cfg.model.ssl_checkpoint_available:
@@ -277,6 +287,8 @@ def main(cfg):
                     model = Resnet(output_size=len(class_weights), feature_extractor=feature_extractor, is_eva=True)
                     if cfg.model.net == 'ElderNet':
                         model = ElderNet(feature_extractor, cfg.model.head, output_size=len(class_weights), is_eva=True)
+                    elif cfg.model.net == 'TremorNet':
+                        model = TremorNet(feature_extractor, input_size=1024, fft_size=60, output_size=2, num_layers=1)
                 # Use a pretrained model of your own
                 else:
                     load_weights(cfg.model.trained_model_path, model, device)
