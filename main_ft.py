@@ -33,6 +33,10 @@ warnings.filterwarnings("ignore")
 now = datetime.now()
 
 TEST_SIZE = 0.125
+RESAMPLED_HZ = 30
+NUM_BINS_FFT = 10
+NUM_FEATURES_FFT = 2
+NUM_AXIS_FFT = 4  # number of axes includ the magnitude
 
 
 def check_performance_post(labels, predictions):
@@ -288,7 +292,9 @@ def main(cfg):
                     if cfg.model.net == 'ElderNet':
                         model = ElderNet(feature_extractor, cfg.model.head, output_size=len(class_weights), is_eva=True)
                     elif cfg.model.net == 'TremorNet':
-                        model = TremorNet(feature_extractor, input_size=1024, fft_size=60, output_size=2, num_layers=1)
+                        model = TremorNet(feature_extractor, input_size=1024,
+                                          fft_size=NUM_FEATURES_FFT * NUM_AXIS_FFT * NUM_BINS_FFT,
+                                          output_size=2, num_layers=1)
                 # Use a pretrained model of your own
                 else:
                     load_weights(cfg.model.trained_model_path, model, device)
