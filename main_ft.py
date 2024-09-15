@@ -294,7 +294,7 @@ def main(cfg):
                     elif cfg.model.net == 'TremorNet':
                         model = TremorNet(feature_extractor, input_size=1024,
                                           fft_size=NUM_FEATURES_FFT * NUM_AXIS_FFT * NUM_BINS_FFT,
-                                          output_size=2, num_layers=1)
+                                          output_size=len(class_weights), num_layers=1)
                 # Use a pretrained model of your own
                 else:
                     load_weights(cfg.model.trained_model_path, model, device)
