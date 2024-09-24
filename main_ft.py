@@ -1,4 +1,5 @@
 from datetime import datetime
+from collections import Counter
 
 import os
 import hydra
@@ -37,6 +38,99 @@ RESAMPLED_HZ = 30
 NUM_BINS_FFT = 10
 NUM_FEATURES_FFT = 2
 NUM_AXIS_FFT = 4  # number of axes includ the magnitude
+
+
+def convert_to_binary_classification(X, Y, groups, convert=False, class_to_remove=-1):
+    """
+    Convert a multi-class classification problem to a binary classification problem.
+
+    Parameters:
+    X (numpy.ndarray): Input data with shape (n_samples, n_features, n_features).
+    Y (numpy.ndarray): Target labels with shape (n_samples, n_classes).
+    groups (numpy.ndarray): Group labels
+    convert (bool): Flag to indicate whether to convert the multi-class problem to binary. Default is False.
+    class_to_remove (int): Class label to remove if convert is True. Default is -1.
+
+    Returns:
+    X (numpy.ndarray): Modified input data with shape (n_samples, n_features, n_features).
+    Y (numpy.ndarray): Modified target labels with shape (n_samples, 2).
+    groups (numpy.ndarray): Modified group labels.
+    """
+    if convert:
+        # Extract the tremor score from the target labels
+        tremor_score = np.argmax(Y, axis=1)
+
+        # Create a mask to remove samples with the specified class
+        mask = tremor_score != class_to_remove
+        X = X[mask]
+        tremor_score = tremor_score[mask]
+        groups = groups[mask]
+
+        # Convert the tremor score to binary labels in one-hot encoding
+        tremor_labels = (tremor_score > 0).astype(int)
+        Y = np.zeros((len(tremor_score), 2))  # one-hot encoding
+        Y[np.arange(tremor_labels.size), tremor_labels] = 1
+
+    return X, Y, groups
+
+
+def rebalance_data(data, labels, subjects, desired_distribution=None):
+    """
+    Rebalance the dataset so that each class has an equal number of samples or follow a desired distribution.
+
+    Parameters:
+        data (numpy.ndarray or list): Input data array.
+        labels (numpy.ndarray or list): Corresponding labels for the data.
+        desired_distribution (dict or None): A dictionary specifying the desired proportion of each class, 
+                                             e.g., {0: 0.4, 1: 0.4, 2: 0.2}. 
+                                             If None, all classes will have equal proportion.
+
+    Returns:
+        balanced_data (list): Rebalanced dataset.
+        balanced_labels (list): Rebalanced labels.
+    """
+    # Ensure input is numpy array for ease of manipulation
+    # If y_pred is in one-hot encoded format, convert it to class indices
+    if len(np.array(labels).shape) > 1:
+        labels_decoded = torch.argmax(torch.tensor(labels), dim=1).numpy()
+    data = np.array(data)
+    labels_decoded = np.array(labels_decoded)
+
+    # Count the number of samples per class
+    label_counts = Counter(labels_decoded)
+
+    # Determine the minimum class size or calculate based on desired distribution
+    if desired_distribution is None:
+        # Equal proportions for each class
+        min_class_size = min(label_counts.values())
+        desired_class_counts = {label: min_class_size for label in label_counts}
+    else:
+        total_samples = len(labels_decoded)
+        # Calculate the number of samples desired for each class based on the given proportions
+        desired_class_counts = {label: int(total_samples * proportion) for label, proportion in desired_distribution.items()}
+
+    # Rebalance the dataset
+    balanced_data = []
+    balanced_labels = []
+    balanced_subjects = []
+
+    for label, count in label_counts.items():
+        # Get indices of all samples for the current label
+        label_indices = np.where(labels_decoded == label)[0]
+
+        if desired_class_counts[label] < count:
+            # Undersample: Randomly select the desired number of samples for the current label
+            selected_indices = np.random.choice(label_indices, size=desired_class_counts[label], replace=False)
+        else:
+            # Oversample: Randomly select with replacement to reach the desired number of samples
+            selected_indices = np.random.choice(label_indices, size=desired_class_counts[label], replace=True)
+
+        # Add the selected data and labels to the balanced lists
+        balanced_data.extend(data[selected_indices])
+        balanced_labels.extend(labels[selected_indices])
+        balanced_subjects.extend(subjects[selected_indices])
+
+    return np.array(balanced_data), np.array(balanced_labels), np.array(balanced_subjects)
 
 
 def check_performance_post(labels, predictions):
@@ -112,8 +206,8 @@ def evaluate_model(model, val_loader, device, loss_fn):
             probs = F.softmax(logits, dim=1)
             pred_y = torch.argmax(probs, dim=1)
 
-            val_acc = torch.sum(pred_y == true_y[:, 1])
-            val_acc = val_acc / (list(pred_y.size())[0])
+            val_acc = torch.sum(pred_y == torch.argmax(true_y, dim=1)).float()
+            val_acc /= pred_y.size(0)  # Normalization to get a probability like value
 
             losses.append(loss.cpu().detach())
             acces.append(val_acc.cpu().detach())
@@ -187,9 +281,12 @@ def main(cfg):
     # fft_product_expanded = np.expand_dims(fft_product, axis=1)  # Shape: (n_windows, 1, 60)
     # fft_product_expanded = np.tile(fft_product_expanded, (1, X.shape[1], 1))  # Shape: (n_windows, 3, 60)
     # X = np.concatenate((X, fft_product_expanded), axis=-1)  # Shape: (n_windows, 3, 360)
-    Y = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsLabels.p'), 'rb'))  # (n_windows,2)
+    Y = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsLabels.p'), 'rb'))  # (n_windows,#classes)
     # The groups vector indicates the subject_id of each window, which is needed for subject-wise division.
     groups = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsSubjects.p'), 'rb'))  # (n_windows,)
+
+    X, Y, groups = convert_to_binary_classification(X, Y, groups, convert=True, class_to_remove=1)
+    X, Y, groups = rebalance_data(X, Y, groups)
 
     seeds = constants.SEEDS
     # List of performance metrics names
@@ -258,11 +355,12 @@ def main(cfg):
             )
 
             # balancing to 90% notwalk, 10% walk
-            walk = np.sum(y_train[:, 1])
-            notwalk = np.sum(y_train[:, 0])
-            class_weights = [(walk * 9.0) / notwalk, 1.0]
+            # walk = np.sum(y_train[:, 1])
+            # notwalk = np.sum(y_train[:, 0])
+            # class_weights = [(walk * 9.0) / notwalk, 1.0]
             # [0 tremor = 1/0.68, 1 tremor = 1/0.22, 3, 4, 5]
             class_weights = [len(y_train) / sum(y_train[:, i]) for i in range(len(y_train[0]))]
+            # class_weights = [1 for _ in range(len(y_train[0]))]
             print(f"[*] DEBUG: CLASS WEIGHTS = {class_weights}")
             # if cfg.model.multiclass:
             # else:
@@ -384,7 +482,7 @@ def main(cfg):
         # Compute the performance's metrics after post-processing
         labels = labels.astype(final_preds.dtype)  # for reliable comparison
         performance_dict['accuracy'][seed], performance_dict['specificity'][seed], performance_dict['recall'][seed], \
-        performance_dict['precision'][seed], performance_dict['F1score'][seed] = \
+            performance_dict['precision'][seed], performance_dict['F1score'][seed] = \
             check_performance_post(labels, final_preds)
 
     with open(os.path.join(output_path, 'performance_matrix.p'), 'wb') as OutputFile:
