@@ -40,6 +40,29 @@ def load_weights(weight_path, model, my_device="cpu"):
     model.load_state_dict(model_dict)
     print("%d Weights loaded" % len(pretrained_dict))
 
+# Overwriting the load function
+def load_weights(weight_path, model, my_device="cpu"):
+    pretrained_dict = torch.load(weight_path, map_location=my_device)
+    pretrained_dict_v2 = copy.deepcopy(pretrained_dict)
+    model_dict = model.state_dict()
+
+    # Filter out layers that don't match the model's architecture
+    pretrained_dict = {
+        k: v
+        for k, v in pretrained_dict_v2.items()
+        if k in model_dict and v.size() == model_dict[k].size()
+    }
+
+    # Overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict)
+    
+    # Load the new state dict
+    model.load_state_dict(model_dict)
+    print(f"Weights loaded for {len(pretrained_dict)} layers")
+
+    # Re-initialize the final layer from scratch, if necessary
+    model.final_output.reset_parameters()  # Assuming `final_output` is the last layer
+
 
 def get_sslnet(tag='v1.0.0', pretrained=False):
     """

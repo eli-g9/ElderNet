@@ -676,7 +676,7 @@ class TremorNet(nn.Module):
         # Compute FFT for the current window
         fft_product = np.empty((x.shape[0], NUM_FEATURES_FFT * NUM_AXIS_FFT * NUM_BINS_FFT))
         for i, window_data in enumerate(x):
-            fft_out = fft_bins(window_data.detach().numpy())
+            fft_out = fft_bins(window_data.detach().cpu().numpy())
             fft_out = fft_out.reshape(NUM_FEATURES_FFT * NUM_AXIS_FFT * NUM_BINS_FFT)
             fft_product[i, :] = fft_out
         fft_result_tensor = torch.from_numpy(fft_product).float()
@@ -688,7 +688,7 @@ class TremorNet(nn.Module):
             x = F.relu(bn(linear(x)))
 
         x = self.interm_output(x)
-        x = x + fft_result_tensor
+        x = x + fft_result_tensor.to(x.device)
         return self.final_output(x)
 
     def _init_weights(self, module):

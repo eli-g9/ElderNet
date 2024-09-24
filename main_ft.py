@@ -40,7 +40,7 @@ NUM_FEATURES_FFT = 2
 NUM_AXIS_FFT = 4  # number of axes includ the magnitude
 
 
-def convert_to_binary_classification(X, Y, groups, convert=False, class_to_remove=-1):
+def convert_to_binary_classification(X, Y, groups, classes_to_remove=-1):
     """
     Convert a multi-class classification problem to a binary classification problem.
 
@@ -56,20 +56,19 @@ def convert_to_binary_classification(X, Y, groups, convert=False, class_to_remov
     Y (numpy.ndarray): Modified target labels with shape (n_samples, 2).
     groups (numpy.ndarray): Modified group labels.
     """
-    if convert:
-        # Extract the tremor score from the target labels
-        tremor_score = np.argmax(Y, axis=1)
+    # Extract the tremor score from the target labels
+    tremor_score = np.argmax(Y, axis=1)
 
-        # Create a mask to remove samples with the specified class
-        mask = tremor_score != class_to_remove
-        X = X[mask]
-        tremor_score = tremor_score[mask]
-        groups = groups[mask]
+    # Create a mask to remove samples with the specified class
+    mask = np.isin(tremor_score, classes_to_remove, invert=True)
+    X = X[mask]
+    tremor_score = tremor_score[mask]
+    groups = groups[mask]
 
-        # Convert the tremor score to binary labels in one-hot encoding
-        tremor_labels = (tremor_score > 0).astype(int)
-        Y = np.zeros((len(tremor_score), 2))  # one-hot encoding
-        Y[np.arange(tremor_labels.size), tremor_labels] = 1
+    # Convert the tremor score to binary labels in one-hot encoding
+    tremor_labels = (tremor_score > 0).astype(int)
+    Y = np.zeros((len(tremor_score), 2))  # one-hot encoding
+    Y[np.arange(tremor_labels.size), tremor_labels] = 1
 
     return X, Y, groups
 
@@ -285,8 +284,10 @@ def main(cfg):
     # The groups vector indicates the subject_id of each window, which is needed for subject-wise division.
     groups = pickle.load(open(os.path.join(PROJECT_ROOT, cfg.data.data_root, 'WindowsSubjects.p'), 'rb'))  # (n_windows,)
 
-    X, Y, groups = convert_to_binary_classification(X, Y, groups, convert=True, class_to_remove=1)
-    X, Y, groups = rebalance_data(X, Y, groups)
+    if not cfg.model.multiclass:
+        X, Y, groups = convert_to_binary_classification(X, Y, groups, classes_to_remove=cfg.model.classes_to_remove)
+    if cfg.model.rebalance:
+        X, Y, groups = rebalance_data(X, Y, groups)
 
     seeds = constants.SEEDS
     # List of performance metrics names
@@ -395,6 +396,7 @@ def main(cfg):
                                           output_size=len(class_weights), num_layers=1)
                 # Use a pretrained model of your own
                 else:
+                    print(f"LOADING FROM {cfg.model.trained_model_path}")
                     load_weights(cfg.model.trained_model_path, model, device)
 
             model.to(device)
@@ -461,21 +463,53 @@ def main(cfg):
             labels.append(Y_test_true)
             predictions.append(Y_test_pred)
 
-        labels = np.concatenate(labels)
-        predictions = np.concatenate(predictions)
-        # Calculate the ROC curve
-        fpr, tpr, thresholds = roc_curve(labels, predictions)
-        roc_auc = roc_auc_score(labels, predictions)  # area under the curve
-        curves_arrays['roc'][seed] = (fpr, tpr, roc_auc)
-        # Calculate the PR curve
-        precision, recall, thresholds = precision_recall_curve(labels, predictions)
-        auprc = average_precision_score(labels, predictions)  # area under the curve
-        curves_arrays['pr'][seed] = (recall, precision, auprc)
-        # Calculate the recall-precision-f1score curve
-        eps = 1e-15
-        f1 = (2 * precision * recall) / (precision + recall + eps)
-        intersection = np.where(precision > recall)[0][0]
-        curves_arrays['performance'][seed] = (thresholds, precision, recall, f1, intersection)
+        # labels = np.concatenate(labels)
+        # predictions = np.concatenate(predictions)
+        # # Calculate the ROC curve
+        # fpr, tpr, thresholds = roc_curve(labels, predictions)
+        # roc_auc = roc_auc_score(labels, predictions)  # area under the curve
+        # curves_arrays['roc'][seed] = (fpr, tpr, roc_auc)
+        # # Calculate the PR curve
+        # precision, recall, thresholds = precision_recall_curve(labels, predictions)
+        # auprc = average_precision_score(labels, predictions)  # area under the curve
+        # curves_arrays['pr'][seed] = (recall, precision, auprc)
+        # # Calculate the recall-precision-f1score curve
+        # eps = 1e-15
+        # f1 = (2 * precision * recall) / (precision + recall + eps)
+        # intersection = np.where(precision > recall)[0][0]
+        # curves_arrays['performance'][seed] = (thresholds, precision, recall, f1, intersection)
+
+                # Initialize dictionaries to store results
+        curves_arrays = {'roc': {}, 'pr': {}, 'performance': {}}
+        performance_dict = {'accuracy': {}, 'specificity': {}, 'recall': {}, 'precision': {}, 'F1score': {}}
+        seed = 0  # Replace with your specific seed or identifier for your experiment
+
+        # Number of classes
+        n_classes = predictions.shape[1]
+
+        # Iterate over each class
+        for i in range(n_classes):
+            # Binarize the labels for the current class
+            y_true = (labels == i).astype(int)
+            y_score = predictions[:, i]
+
+            # Calculate ROC curve and AUC for the current class
+            fpr, tpr, thresholds = roc_curve(y_true, y_score)
+            roc_auc = roc_auc_score(y_true, y_score)
+            curves_arrays['roc'][i] = (fpr, tpr, roc_auc)
+
+            # Calculate Precision-Recall curve and AUC for the current class
+            precision, recall, thresholds_pr = precision_recall_curve(y_true, y_score)
+            auprc = average_precision_score(y_true, y_score)
+            curves_arrays['pr'][i] = (recall, precision, auprc)
+
+            # Calculate F1 Score, Precision-Recall Curve metrics
+            eps = 1e-15
+            f1 = (2 * precision * recall) / (precision + recall + eps)
+            intersection = np.where(precision > recall)[0][0] if len(precision) > 0 and len(recall) > 0 else None
+            curves_arrays['performance'][i] = (thresholds_pr, precision, recall, f1, intersection)
+
+
         # Round predictions
         final_preds = np.round(predictions)
 
