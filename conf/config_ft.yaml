@@ -8,14 +8,17 @@ defaults:
 model:
   ssl_method: mtl
   # num_epochs : 5
-  # num_epochs: 30
-  num_epochs: 10
+  num_epochs: 30
+  # num_epochs: 2
   lr :  1e-4
   batch_size : 100
+  # patience: 5
   patience: 5
   multiclass: True
-  rebalance: True
-  classes_to_remove: [1]
+  rebalance: False
+  classes_to_remove: [1] # only matters in case of binary classification
+  equal_class_weights: True
+  use_groups: False
 
 data:
   # data_root: \parsing_output
