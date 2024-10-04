@@ -5,8 +5,8 @@ num_layers: 3
 non_linearity: True
 pretrained: True
 ssl_checkpoint_available: False
-ft_checkpoint_available: True
+ft_checkpoint_available: False
 # trained_model_path : F:\UNI\ParkinsonsProject\ElderNet\model_check_point\ft_weights.pt
 # trained_model_path : F:\UNI\ParkinsonsProject\ElderNet\model_check_point\ssl_weights.mdl
 # Might need the full path for this one
-trained_model_path : ./model_check_point/ft_weights.pt
+trained_model_path : C:\Users\gongo\OneDrive - mail.tau.ac.il\Studies\Smeseter B\ParkScan-Pro\logs\models\mtl_ElderNet_pretrained_True_head_fc_nonlinearity_True_nLayers_3FT_lr_0.0001_batchSize_100_n_epochs_3022-09-2024_14_02_44\weights.pt
