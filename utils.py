@@ -40,6 +40,7 @@ def load_weights(weight_path, model, my_device="cpu"):
     model.load_state_dict(model_dict)
     print("%d Weights loaded" % len(pretrained_dict))
 
+
 # Overwriting the load function
 def load_weights(weight_path, model, my_device="cpu"):
     pretrained_dict = torch.load(weight_path, map_location=my_device)
@@ -55,7 +56,7 @@ def load_weights(weight_path, model, my_device="cpu"):
 
     # Overwrite entries in the existing state dict
     model_dict.update(pretrained_dict)
-    
+
     # Load the new state dict
     model.load_state_dict(model_dict)
     print(f"Weights loaded for {len(pretrained_dict)} layers")
@@ -170,7 +171,8 @@ class EarlyStopping:
         if self.verbose:
             msg = "Validation loss decreased"
             msg = msg + f"({self.val_loss_min:.6f} --> {val_loss:.6f})"
-            msg = msg + "Saving model ..."
+            # msg = msg + f" Output layer size is: {model.output_size}"
+            msg = msg + " Saving model ..."
             self.trace_func(msg)
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss

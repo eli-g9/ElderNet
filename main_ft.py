@@ -4,15 +4,17 @@ from collections import Counter
 import os
 import hydra
 import numpy as np
+import matplotlib.pyplot as plt
 import pickle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
 
-from sklearn.model_selection import StratifiedGroupKFold, GroupShuffleSplit
+from sklearn.model_selection import StratifiedGroupKFold, GroupShuffleSplit, StratifiedShuffleSplit
 from sklearn.metrics import roc_curve, precision_recall_curve
 from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torch.utils.data import DataLoader
 from models import Resnet, ElderNet, TremorNet
 
@@ -80,8 +82,8 @@ def rebalance_data(data, labels, subjects, desired_distribution=None):
     Parameters:
         data (numpy.ndarray or list): Input data array.
         labels (numpy.ndarray or list): Corresponding labels for the data.
-        desired_distribution (dict or None): A dictionary specifying the desired proportion of each class, 
-                                             e.g., {0: 0.4, 1: 0.4, 2: 0.2}. 
+        desired_distribution (dict or None): A dictionary specifying the desired proportion of each class,
+                                             e.g., {0: 0.4, 1: 0.4, 2: 0.2}.
                                              If None, all classes will have equal proportion.
 
     Returns:
@@ -178,10 +180,10 @@ def predict(model, data_loader, device):
             x = x.to(device, dtype=torch.float)
             logits = model(x)
             probs = F.softmax(logits, dim=1)
-            preds = probs[:, 1]  # gait probabilities
+            preds = torch.argmax(probs, dim=1)
             y = torch.argmax(y, dim=1)
             true_list.append(y)
-            predictions_list.append(preds.cpu())
+            predictions_list.append(preds.cpu().to(torch.int))
 
     true_list = torch.cat(true_list)
     predictions_list = torch.cat(predictions_list)
@@ -215,12 +217,19 @@ def evaluate_model(model, val_loader, device, loss_fn):
     return np.mean(losses), np.mean(acces)
 
 
-def shufflegroupkfold(x, y, groups, n_splits=5):
-    sgkf = StratifiedGroupKFold(n_splits=n_splits)
+def shufflegroupkfold(x, y, groups, use_groups, seed, n_splits=5):
     labels = np.argmax(y, axis=1)
-    for i, (train_index, test_index) in enumerate(sgkf.split(x, labels, groups)):
+
+    if use_groups:
+        sgkf = StratifiedGroupKFold(n_splits=n_splits)
+        splitter = sgkf.split(x, labels, groups)
+    else:
+        sss = StratifiedShuffleSplit(n_splits=n_splits)
+        splitter = sss.split(x, labels)
+
+    for i, (train_index, test_index) in enumerate(splitter):
         print(f"Fold {i}:")
-        yield train_index, test_index
+        yield i, train_index, test_index
 
 
 def set_seed(device, my_seed=0):
@@ -304,14 +313,20 @@ def main(cfg):
         set_seed(my_seed=seeds[seed], device=device)
         labels = []
         predictions = []
-        for train_idxs, test_idxs in shufflegroupkfold(X, Y, groups):
+        for i, train_idxs, test_idxs in shufflegroupkfold(X, Y, groups, cfg.model.use_groups, seed):
             X_train, Y_train, groups_train = X[train_idxs], Y[train_idxs], groups[train_idxs]
             X_test, Y_test, groups_test = X[test_idxs], Y[test_idxs], groups[test_idxs]
 
             # prepare training and validation sets
-            folds = GroupShuffleSplit(
-                1, test_size=TEST_SIZE, random_state=41
-            ).split(X_train, Y_train, groups=groups_train)
+            if cfg.model.use_groups:
+                folds = GroupShuffleSplit(
+                    1, test_size=TEST_SIZE, random_state=41
+                ).split(X_train, Y_train, groups=groups_train)
+            else:
+                folds = StratifiedShuffleSplit(
+                    1, test_size=TEST_SIZE, random_state=41
+                ).split(X_train, Y_train)
+
             train_idx, val_idx = next(folds)
 
             x_train = X_train[train_idx]
@@ -360,12 +375,12 @@ def main(cfg):
             # notwalk = np.sum(y_train[:, 0])
             # class_weights = [(walk * 9.0) / notwalk, 1.0]
             # [0 tremor = 1/0.68, 1 tremor = 1/0.22, 3, 4, 5]
-            class_weights = [len(y_train) / sum(y_train[:, i]) for i in range(len(y_train[0]))]
-            # class_weights = [1 for _ in range(len(y_train[0]))]
+            if cfg.model.equal_class_weights:
+                class_weights = class_weights = [1 for _ in range(len(y_train[0]))]
+            else:
+                class_weights = [len(y_train) / sum(y_train[:, i]) for i in range(len(y_train[0]))]
             print(f"[*] DEBUG: CLASS WEIGHTS = {class_weights}")
-            # if cfg.model.multiclass:
-            # else:
-            #     class_weights =
+
             #############################################
             # Set the Model
             #############################################
@@ -397,8 +412,10 @@ def main(cfg):
                 # Use a pretrained model of your own
                 else:
                     print(f"LOADING FROM {cfg.model.trained_model_path}")
+                    # model.load_state_dict(torch.load(cfg.model.trained_model_path, weights_only=True))
                     load_weights(cfg.model.trained_model_path, model, device)
 
+            print(f"Model output size: {model.output_size}")
             model.to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr, amsgrad=True)
 
@@ -409,56 +426,67 @@ def main(cfg):
             else:
                 loss_fn = nn.CrossEntropyLoss()
 
-            early_stopping = EarlyStopping(patience=cfg.model.patience, path=weights_path, verbose=True)
-            print('Training SSL')
-            for epoch in range(num_epochs):
-                model.train()
-                train_losses = []
-                train_acces = []
-                for i, (x, y) in enumerate(tqdm(train_loader)):
-                    x.requires_grad_(True)
-                    x = x.to(device, dtype=torch.float)
-                    true_y = y.to(device, dtype=torch.long)
+            if not cfg.model.ft_checkpoint_available:
+                early_stopping = EarlyStopping(patience=cfg.model.patience, path=weights_path, verbose=True)
+                print('Training SSL')
+                for epoch in range(num_epochs):
+                    model.train()
+                    train_losses = []
+                    train_acces = []
+                    for x, y in tqdm(train_loader):
+                        x.requires_grad_(True)
+                        x = x.to(device, dtype=torch.float)
+                        true_y = y.to(device, dtype=torch.long)
 
-                    optimizer.zero_grad()
+                        optimizer.zero_grad()
 
-                    logits = model(x)
-                    # loss = loss_fn(logits.float(), true_y.float())
-                    loss = loss_fn(logits.float(), torch.argmax(true_y, dim=1))
-                    loss.backward()
-                    optimizer.step()
+                        logits = model(x)
+                        # loss = loss_fn(logits.float(), true_y.float())
+                        loss = loss_fn(logits.float(), torch.argmax(true_y, dim=1))
+                        loss.backward()
+                        optimizer.step()
 
-                    # Convert logits to probabilities using softmax activation function
-                    probs = F.softmax(logits, dim=1)
-                    # Extract the gait probabilities
-                    pred_y = torch.argmax(probs, dim=1)
-                    # train_acc = torch.sum(pred_y == true_y[:, 1])
-                    train_acc = torch.sum(pred_y == torch.argmax(true_y, dim=1))
-                    train_acc = train_acc / (pred_y.size()[0])
+                        # Convert logits to probabilities using softmax activation function
+                        probs = F.softmax(logits, dim=1)
+                        # Extract the gait probabilities
+                        pred_y = torch.argmax(probs, dim=1)
+                        # train_acc = torch.sum(pred_y == true_y[:, 1])
+                        train_acc = torch.sum(pred_y == torch.argmax(true_y, dim=1))
+                        train_acc = train_acc / (pred_y.size()[0])
 
-                    train_losses.append(loss.cpu().detach())
-                    train_acces.append(train_acc.cpu().detach())
+                        train_losses.append(loss.cpu().detach())
+                        train_acces.append(train_acc.cpu().detach())
 
-                val_loss, val_acc = evaluate_model(model, val_loader, device, loss_fn)
+                    val_loss, val_acc = evaluate_model(model, val_loader, device, loss_fn)
 
-                epoch_len = len(str(num_epochs))
-                print_msg = (
-                        f"[{epoch:>{epoch_len}}/{num_epochs:>{epoch_len}}] | "
-                        + f"train_loss: {np.mean(train_losses):.3f} | "
-                        + f"train_acc: {np.mean(train_acces):.3f} | "
-                        + f"val_loss: {val_loss:.3f} | "
-                        + f"val_acc: {val_acc:.2f}"
-                )
+                    epoch_len = len(str(num_epochs))
+                    print_msg = (
+                            f"[{epoch:>{epoch_len}}/{num_epochs:>{epoch_len}}] | "
+                            + f"train_loss: {np.mean(train_losses):.3f} | "
+                            + f"train_acc: {np.mean(train_acces):.3f} | "
+                            + f"val_loss: {val_loss:.3f} | "
+                            + f"val_acc: {val_acc:.2f}"
+                    )
 
-                print(print_msg)
-                early_stopping(val_loss, model)
-                if early_stopping.early_stop:
-                    print('Early stopping')
-                    print(f'SSLNet weights saved to {weights_path}')
-                    break
+                    print(print_msg)
+                    early_stopping(val_loss, model)
+                    if early_stopping.early_stop:
+                        print('Early stopping')
+                        print(f'SSLNet weights saved to {weights_path}')
+                        break
 
             # Predict the tset fold
             Y_test_true, Y_test_pred = predict(model, test_loader, device)
+
+            # Generate confusion matrix
+            conf_matrix = confusion_matrix(Y_test_true, Y_test_pred)
+            disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix)
+            disp.plot(cmap='Greens')
+            plt.title('Confusion Matrix')
+            cm_path = os.path.join(output_path, f'confusion_matrix_{i}.png')
+            plt.savefig(cm_path)  # Save the plot instead of showing it
+            plt.close()  # Close the plot to free up memory
+
             # Append the predictions of the current test fold
             labels.append(Y_test_true)
             predictions.append(Y_test_pred)
@@ -479,42 +507,42 @@ def main(cfg):
         # intersection = np.where(precision > recall)[0][0]
         # curves_arrays['performance'][seed] = (thresholds, precision, recall, f1, intersection)
 
-                # Initialize dictionaries to store results
+        # Initialize dictionaries to store results
         curves_arrays = {'roc': {}, 'pr': {}, 'performance': {}}
         performance_dict = {'accuracy': {}, 'specificity': {}, 'recall': {}, 'precision': {}, 'F1score': {}}
         seed = 0  # Replace with your specific seed or identifier for your experiment
 
         # Number of classes
-        n_classes = predictions.shape[1]
+        # n_classes = predictions.shape[1]
 
-        # Iterate over each class
-        for i in range(n_classes):
-            # Binarize the labels for the current class
-            y_true = (labels == i).astype(int)
-            y_score = predictions[:, i]
+        # # Iterate over each class
+        # for i in range(n_classes):
+        #     # Binarize the labels for the current class
+        #     y_true = (labels == i).astype(int)
+        #     y_score = predictions[:, i]
 
-            # Calculate ROC curve and AUC for the current class
-            fpr, tpr, thresholds = roc_curve(y_true, y_score)
-            roc_auc = roc_auc_score(y_true, y_score)
-            curves_arrays['roc'][i] = (fpr, tpr, roc_auc)
+        #     # Calculate ROC curve and AUC for the current class
+        #     fpr, tpr, thresholds = roc_curve(y_true, y_score)
+        #     roc_auc = roc_auc_score(y_true, y_score)
+        #     curves_arrays['roc'][i] = (fpr, tpr, roc_auc)
 
-            # Calculate Precision-Recall curve and AUC for the current class
-            precision, recall, thresholds_pr = precision_recall_curve(y_true, y_score)
-            auprc = average_precision_score(y_true, y_score)
-            curves_arrays['pr'][i] = (recall, precision, auprc)
+        #     # Calculate Precision-Recall curve and AUC for the current class
+        #     precision, recall, thresholds_pr = precision_recall_curve(y_true, y_score)
+        #     auprc = average_precision_score(y_true, y_score)
+        #     curves_arrays['pr'][i] = (recall, precision, auprc)
 
-            # Calculate F1 Score, Precision-Recall Curve metrics
-            eps = 1e-15
-            f1 = (2 * precision * recall) / (precision + recall + eps)
-            intersection = np.where(precision > recall)[0][0] if len(precision) > 0 and len(recall) > 0 else None
-            curves_arrays['performance'][i] = (thresholds_pr, precision, recall, f1, intersection)
-
+        #     # Calculate F1 Score, Precision-Recall Curve metrics
+        #     eps = 1e-15
+        #     f1 = (2 * precision * recall) / (precision + recall + eps)
+        #     intersection = np.where(precision > recall)[0][0] if len(precision) > 0 and len(recall) > 0 else None
+        #     curves_arrays['performance'][i] = (thresholds_pr, precision, recall, f1, intersection)
 
         # Round predictions
         final_preds = np.round(predictions)
 
         # Compute the performance's metrics after post-processing
-        labels = labels.astype(final_preds.dtype)  # for reliable comparison
+        labels = np.array(labels)
+        labels = labels.astype(final_preds.dtype) # for reliable comparison
         performance_dict['accuracy'][seed], performance_dict['specificity'][seed], performance_dict['recall'][seed], \
             performance_dict['precision'][seed], performance_dict['F1score'][seed] = \
             check_performance_post(labels, final_preds)
